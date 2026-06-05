@@ -1,0 +1,14 @@
+[theme]
+# Акцентный цвет — спокойный синий вместо красного по умолчанию
+primaryColor = "#4F6FDE"
+
+# Фон страницы — мягкий светло-серый
+backgroundColor = "#F6F7FB"
+
+# Фон виджетов, формы, карточек
+secondaryBackgroundColor = "#ECEEF5"
+
+# Основной цвет текста — тёмно-серый, не чёрный
+textColor = "#1A1D2E"
+
+font = "sans serif"

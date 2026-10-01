@@ -2,6 +2,9 @@
 .env
 *.env
 
+# Streamlit secrets (config.toml is tracked, secrets.toml is not)
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]

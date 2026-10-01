@@ -3,7 +3,6 @@ Query logger: appends each student interaction to logs/query_log.csv.
 """
 
 import csv
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +55,15 @@ def guess_topic(question: str) -> str:
     return "general"
 
 
+# Spreadsheets treat a cell starting with one of these characters as a formula.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralize spreadsheet formulas by prefixing an apostrophe (CSV injection)."""
+    return "'" + value if value.startswith(_FORMULA_PREFIXES) else value
+
+
 def _ensure_log_file() -> None:
     """Create the log file with headers if it does not exist."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,12 +87,13 @@ def log_query(
     topic = guess_topic(question)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+    # Question and answer text is user/model controlled: keep it from becoming a formula.
     row = {
         "timestamp": timestamp,
-        "question": question,
-        "learner_level": learner_level,
-        "retrieved_sources": sources_str,
-        "answer_preview": answer_preview,
+        "question": _csv_safe(question),
+        "learner_level": _csv_safe(learner_level),
+        "retrieved_sources": _csv_safe(sources_str),
+        "answer_preview": _csv_safe(answer_preview),
         "topic_guess": topic,
     }
 

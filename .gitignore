@@ -33,6 +33,10 @@ ENV/
 storage/faiss_index/*.faiss
 storage/faiss_index/*.pkl
 
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
 # Logs (keep gitkeep, not logs themselves)
 logs/*.csv
 

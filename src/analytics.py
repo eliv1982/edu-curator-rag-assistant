@@ -3,14 +3,13 @@ Analytics: load and summarise data from logs/query_log.csv for the dashboard.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
 LOG_FILE = Path("logs/query_log.csv")
 
 
-def load_logs() -> Optional[pd.DataFrame]:
+def load_logs() -> pd.DataFrame | None:
     """
     Load query log CSV.
 
@@ -23,7 +22,8 @@ def load_logs() -> Optional[pd.DataFrame]:
         if df.empty:
             return None
         return df
-    except Exception:
+    except (OSError, ValueError):
+        # Unreadable or malformed log (pandas parse/empty-data errors are ValueErrors).
         return None
 
 

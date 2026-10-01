@@ -5,12 +5,11 @@ RAG pipeline: index building and document retrieval via FAISS.
 import csv
 import re
 from pathlib import Path
-from typing import Optional
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 DATA_DIR = Path("data")
 INDEX_DIR = Path("storage/faiss_index")
@@ -25,58 +24,64 @@ CHUNK_OVERLAP = 100
 SKIP_FILES = {"few_shot_examples.md"}
 
 
-def _load_assignments_as_documents() -> list[Document]:
-    """
-    Convert each row of assignments.csv into a LangChain Document.
+def _get_value(row: dict, *keys: str) -> str:
+    """Return the first non-empty value found for any of the given keys."""
+    # Strip a stray BOM from header names; missing cells (short rows) are None.
+    clean = {(k or "").lstrip("\ufeff").strip(): v for k, v in row.items()}
+    for key in keys:
+        val = clean.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
 
-    Uses utf-8-sig encoding to safely strip Windows BOM (\ufeff).
-    Supports both English and Russian column name variants via get_value().
+
+def _read_assignments() -> list[dict]:
+    """
+    Read assignments.csv into rows with the canonical English keys
+    (module, assignment, deadline, status, description).
+
+    Uses utf-8-sig to safely strip the BOM that Windows/Excel adds, and accepts
+    both English and Russian column names. Returns [] if the file is missing.
     """
     if not ASSIGNMENTS_CSV.exists():
         return []
-
-    def get_value(row: dict, *keys: str) -> str:
-        """Return the first non-empty value found for any of the given keys."""
-        for key in keys:
-            val = row.get(key, "").strip()
-            if val:
-                return val
-        # Last resort: try stripping BOM from all keys
-        clean = {k.lstrip("\ufeff").strip(): v for k, v in row.items()}
-        for key in keys:
-            val = clean.get(key, "").strip()
-            if val:
-                return val
-        return ""
-
-    docs = []
-    # utf-8-sig strips the BOM that Windows/Excel adds to UTF-8 CSV files
+    rows = []
     with open(ASSIGNMENTS_CSV, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            module = get_value(row, "module", "Модуль")
-            assignment = get_value(row, "assignment", "Задание")
-            deadline = get_value(row, "deadline", "Дедлайн")
-            status = get_value(row, "status", "Статус")
-            description = get_value(row, "description", "Описание")
+        for row in csv.DictReader(f):
+            rows.append({
+                "module": _get_value(row, "module", "Модуль"),
+                "assignment": _get_value(row, "assignment", "Задание"),
+                "deadline": _get_value(row, "deadline", "Дедлайн"),
+                "status": _get_value(row, "status", "Статус"),
+                "description": _get_value(row, "description", "Описание"),
+            })
+    return rows
 
-            text = (
-                "Источник: LMS-заглушка assignments.csv\n"
-                f"Модуль: {module}\n"
-                f"Задание: {assignment}\n"
-                f"Дедлайн: {deadline}\n"
-                f"Статус: {status}\n"
-                f"Описание: {description}"
-            )
-            metadata = {
-                "source": "assignments.csv",
-                "resource_type": "lms_stub",
-                "topic": "deadlines",
-                "module": module,
-                "assignment": assignment,
-            }
-            docs.append(Document(page_content=text, metadata=metadata))
-            print(f"  [assignments] {module} | deadline={deadline} | {assignment}")
+
+def _load_assignments_as_documents() -> list[Document]:
+    """Convert each row of assignments.csv into a LangChain Document."""
+    docs = []
+    for row in _read_assignments():
+        module = row["module"]
+        assignment = row["assignment"]
+        deadline = row["deadline"]
+        text = (
+            "Источник: LMS-заглушка assignments.csv\n"
+            f"Модуль: {module}\n"
+            f"Задание: {assignment}\n"
+            f"Дедлайн: {deadline}\n"
+            f"Статус: {row['status']}\n"
+            f"Описание: {row['description']}"
+        )
+        metadata = {
+            "source": "assignments.csv",
+            "resource_type": "lms_stub",
+            "topic": "deadlines",
+            "module": module,
+            "assignment": assignment,
+        }
+        docs.append(Document(page_content=text, metadata=metadata))
+        print(f"  [assignments] {module} | deadline={deadline} | {assignment}")
 
     return docs
 
@@ -140,7 +145,7 @@ def build_index() -> FAISS:
     return vectorstore
 
 
-def load_index() -> Optional[FAISS]:
+def load_index() -> FAISS | None:
     """Load FAISS index from disk. Returns None if index does not exist."""
     index_file = INDEX_DIR / "index.faiss"
     if not index_file.exists():
@@ -180,8 +185,11 @@ def retrieve(query: str, vectorstore: FAISS, top_k: int = 4) -> list[dict]:
 
 _DEADLINE_TRIGGERS = [
     "дедлайн", "срок", "сдать", "задани",  # "задани" — основа для задание/задания/заданий
-    "когда сдавать", "когда нужно", "до когда", "модуль",
+    "когда сдавать", "когда нужно", "до когда",
 ]
+# Само слово «модуль» намеренно не является триггером: «Что изучается в модуле 3?»
+# — вопрос о содержании, а не о дедлайне. Номер модуля используется только после
+# того, как вопрос распознан как вопрос о дедлайнах/заданиях.
 
 
 def detect_assignment_query(question: str) -> bool:
@@ -190,36 +198,36 @@ def detect_assignment_query(question: str) -> bool:
     return any(kw in q for kw in _DEADLINE_TRIGGERS)
 
 
-def extract_module_number(question: str) -> Optional[int]:
-    """Extract a module number (1–6) from the question, e.g. 'модуля 4' → 4."""
-    match = re.search(r"модул[яюеь\w]*\s+(\d)", question.lower())
-    if match:
-        n = int(match.group(1))
-        if 1 <= n <= 6:
-            return n
-    return None
+def extract_module_number(question: str) -> int | None:
+    """
+    Extract an explicit module number from the question.
+
+    Handles any number of digits and the common Russian inflections:
+    'модуль 4' → 4, 'модуля 10' → 10. Returns None if no number follows
+    the word «модуль».
+    """
+    match = re.search(r"модул\w*\s+(\d+)", question.lower())
+    return int(match.group(1)) if match else None
 
 
-def _read_assignments() -> list[dict]:
-    """Read assignments.csv and return a list of row dicts."""
-    if not ASSIGNMENTS_CSV.exists():
-        return []
-    rows = []
-    with open(ASSIGNMENTS_CSV, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(dict(row))
-    return rows
+def _module_number(module_value: str) -> int | None:
+    """Number from a structured module value: 'Модуль 10' → 10."""
+    match = re.search(r"\d+", module_value)
+    return int(match.group()) if match else None
 
 
 def get_assignment_context(question: str) -> list[dict]:
     """
     Deterministically build context chunks from assignments.csv.
 
-    - If a module number is found in the question, return that module's row.
-    - Otherwise return a compact summary of all assignments.
+    - If the question names a module that exists in the data, return exactly
+      that module's row (matched on the module number, so 1 never matches 10).
+    - Otherwise return a compact summary of all assignments. This includes a
+      module number that is not in the data: no deadline is invented for it,
+      and the summary shows which modules actually exist.
 
-    Returns the same list[dict] format as retrieve().
+    Always returns a list in the same format as retrieve(); it is empty only
+    when there is no assignment data at all.
     """
     rows = _read_assignments()
     if not rows:
@@ -228,36 +236,33 @@ def get_assignment_context(question: str) -> list[dict]:
     module_num = extract_module_number(question)
 
     if module_num is not None:
-        # Specific module lookup
         for row in rows:
-            module_val = row.get("module", "")
-            if str(module_num) in module_val:
+            if _module_number(row["module"]) == module_num:
                 text = (
                     "Источник: assignments.csv (точные данные о дедлайне)\n"
-                    f"Модуль: {module_val}\n"
-                    f"Задание: {row.get('assignment', '')}\n"
-                    f"Дедлайн: {row.get('deadline', '')}\n"
-                    f"Статус: {row.get('status', '')}\n"
-                    f"Описание: {row.get('description', '')}"
+                    f"Модуль: {row['module']}\n"
+                    f"Задание: {row['assignment']}\n"
+                    f"Дедлайн: {row['deadline']}\n"
+                    f"Статус: {row['status']}\n"
+                    f"Описание: {row['description']}"
                 )
                 return [{"text": text, "metadata": {
                     "source": "assignments.csv",
                     "resource_type": "lms_stub",
                     "topic": "deadlines",
-                    "module": module_val,
+                    "module": row["module"],
                 }}]
-    else:
-        # General assignment query — return compact list of all assignments
-        lines = ["Источник: assignments.csv — список всех заданий и дедлайнов\n"]
-        for row in rows:
-            lines.append(
-                f"• {row.get('module', '')} | {row.get('assignment', '')} "
-                f"| Дедлайн: {row.get('deadline', '')} | {row.get('status', '')}"
-            )
-        text = "\n".join(lines)
-        return [{"text": text, "metadata": {
-            "source": "assignments.csv",
-            "resource_type": "lms_stub",
-            "topic": "deadlines",
-            "module": "all",
-        }}]
+
+    lines = ["Источник: assignments.csv — список всех заданий и дедлайнов\n"]
+    for row in rows:
+        lines.append(
+            f"• {row['module']} | {row['assignment']} "
+            f"| Дедлайн: {row['deadline']} | {row['status']}"
+        )
+    text = "\n".join(lines)
+    return [{"text": text, "metadata": {
+        "source": "assignments.csv",
+        "resource_type": "lms_stub",
+        "topic": "deadlines",
+        "module": "all",
+    }}]

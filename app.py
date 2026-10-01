@@ -3,27 +3,28 @@ EduCurator AI — Streamlit MVP
 RAG-ассистент куратора для курса «AI Skills Starter Course».
 """
 
+import logging
 import os
-import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
-
-sys.path.insert(0, str(Path(__file__).parent))
-
+from src import analytics
+from src.logger import log_query
+from src.prompt_builder import ask_llm, format_context
 from src.rag_pipeline import (
-    get_or_build_index,
-    retrieve,
     detect_assignment_query,
     get_assignment_context,
+    get_or_build_index,
+    retrieve,
 )
-from src.prompt_builder import ask_llm, format_context
-from src.logger import log_query
-from src import analytics
+
+load_dotenv()
+
+# Подробности ошибок — только в локальный лог; пользователю показываем общий текст.
+logger = logging.getLogger("edu_curator")
 
 
 # ---------------------------------------------------------------------------
@@ -124,17 +125,18 @@ tab_ask, tab_course, tab_analytics = st.tabs(TABS)
 # ============================================================
 # ВКЛАДКА 1 — Задать вопрос
 # ============================================================
-with tab_ask:
+def render_ask_tab() -> None:
     st.title("🎓 EduCurator AI")
     st.markdown(
         """
         **Ваш AI-ассистент куратора для курса «AI Skills Starter Course».**
 
         Задайте любой вопрос о материалах курса, дедлайнах, заданиях или ресурсах.
-        Я отвечу, опираясь на базу знаний курса, и всегда укажу источники.
+        Я отвечу, опираясь на материалы курса, найденные по вашему вопросу.
         """
     )
 
+    # Без ключа отключаем только эту вкладку; «Курс» и «Аналитика» работают без OpenAI.
     if not check_api_key():
         st.error(
             "⚠️ **Ключ OpenAI API не найден.**\n\n"
@@ -142,7 +144,7 @@ with tab_ask:
             "```\nOPENAI_API_KEY=sk-ваш-ключ\n```\n"
             "Затем перезапустите приложение."
         )
-        st.stop()
+        return
 
     st.divider()
 
@@ -163,7 +165,7 @@ with tab_ask:
             help="Выберите уровень, чтобы ассистент адаптировал сложность ответа.",
         )
 
-        submitted = st.form_submit_button("Отправить вопрос", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Отправить вопрос", width="stretch", type="primary")
 
     # ------------------------------------------------------------------
     # Генерация ответа
@@ -192,21 +194,30 @@ with tab_ask:
                     context, sources = format_context(chunks)
                     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
                     answer = ask_llm(question, context, learner_level, model=model)
-                    log_query(question, learner_level, sources, answer)
+                except Exception:
+                    logger.exception("Failed to answer a question")
+                    st.error("Не удалось получить ответ. Попробуйте ещё раз чуть позже.")
+                else:
+                    # Журнал — вспомогательная функция: его сбой не должен скрывать ответ.
+                    try:
+                        log_query(question, learner_level, sources, answer)
+                    except Exception:
+                        logger.warning("Failed to write the query log", exc_info=True)
 
                     st.subheader("Ответ")
                     st.markdown(answer)
 
                     if sources:
                         st.divider()
-                        st.subheader("Источники")
+                        st.subheader("Найденные материалы")
                         for src in sources:
                             st.markdown(f"- `{src}`")
                     else:
                         st.info("По этому запросу конкретные материалы курса не найдены.")
 
-                except Exception as exc:
-                    st.error(f"Что-то пошло не так: {exc}")
+
+with tab_ask:
+    render_ask_tab()
 
 
 # ============================================================
@@ -304,7 +315,7 @@ with tab_course:
             # Компактная таблица без колонки описания
             st.dataframe(
                 df_assignments.drop(columns=["description"], errors="ignore"),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "module": st.column_config.TextColumn("Модуль", width="small"),
@@ -321,8 +332,9 @@ with tab_course:
                 with st.expander(label):
                     st.markdown(row.get("description", "Описание отсутствует."))
 
-        except Exception as exc:
-            st.error(f"Не удалось загрузить assignments.csv: {exc}")
+        except Exception:
+            logger.exception("Failed to load assignments.csv")
+            st.error("Не удалось загрузить список заданий.")
     else:
         st.warning("Файл assignments.csv не найден в data/.")
 
@@ -412,6 +424,6 @@ with tab_analytics:
             )
         st.dataframe(
             recent_display,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )

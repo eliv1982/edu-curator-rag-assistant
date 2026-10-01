@@ -42,6 +42,24 @@ def test_logger_output_is_readable_and_aggregates_correctly(log_file):
     assert by_topic["rag"] == 1
 
 
+def test_raw_questions_are_hidden_by_default():
+    assert analytics.recent_questions_enabled() is False  # variable unset (see conftest)
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "enabled", "2"])
+def test_other_values_keep_raw_questions_hidden(monkeypatch, value):
+    monkeypatch.setenv("SHOW_RECENT_QUESTIONS", value)
+
+    assert analytics.recent_questions_enabled() is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "True", "yes", "on", " true "])
+def test_explicit_opt_in_enables_raw_questions(monkeypatch, value):
+    monkeypatch.setenv("SHOW_RECENT_QUESTIONS", value)
+
+    assert analytics.recent_questions_enabled() is True
+
+
 def test_recent_questions_are_newest_first_and_limited(log_file):
     for n in range(5):
         logger.log_query(f"вопрос {n}", "beginner", [], "ответ")

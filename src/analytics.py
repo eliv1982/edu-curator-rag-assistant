@@ -2,11 +2,25 @@
 Analytics: load and summarise data from logs/query_log.csv for the dashboard.
 """
 
+import os
 from pathlib import Path
 
 import pandas as pd
 
 LOG_FILE = Path("logs/query_log.csv")
+
+SHOW_RECENT_QUESTIONS_ENV = "SHOW_RECENT_QUESTIONS"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def recent_questions_enabled() -> bool:
+    """
+    Whether the dashboard may display raw question text.
+
+    Off by default: the log holds free-text questions that students may fill with
+    personal data. A local curator opts in by setting SHOW_RECENT_QUESTIONS=true.
+    """
+    return os.getenv(SHOW_RECENT_QUESTIONS_ENV, "").strip().lower() in _TRUTHY
 
 
 def load_logs() -> pd.DataFrame | None:

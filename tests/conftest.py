@@ -24,10 +24,12 @@ def offline_no_key(monkeypatch):
     Guarantee that no test can reach OpenAI (or any non-local host).
 
     - OPENAI_API_KEY is removed, so nothing can authenticate by accident.
+    - SHOW_RECENT_QUESTIONS is removed, so tests start from the privacy default.
     - Non-loopback connections and DNS lookups raise immediately. Loopback is
       allowed because asyncio uses it internally (socketpair on Windows).
     """
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("SHOW_RECENT_QUESTIONS", raising=False)
 
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex

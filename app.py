@@ -404,26 +404,34 @@ with tab_analytics:
                 st.write("Нет данных.")
 
         st.divider()
-        st.subheader("Последние 10 вопросов")
-        recent = analytics.recent_questions(df_log, n=10)
-        # Переименовываем колонки для русскоязычного отображения
-        COL_RU = {
-            "timestamp": "Дата/время",
-            "question": "Вопрос",
-            "learner_level": "Уровень",
-            "topic_guess": "Тема",
-        }
-        recent_display = recent.rename(columns=COL_RU)
-        if "Уровень" in recent_display.columns:
-            recent_display["Уровень"] = recent_display["Уровень"].map(
-                lambda x: LEVEL_RU.get(x, x)
+        # Тексты вопросов — свободный ввод студентов; по умолчанию не показываем.
+        if not analytics.recent_questions_enabled():
+            st.caption(
+                "Тексты вопросов скрыты по умолчанию: журнал хранит их как свободный текст. "
+                "Для локального использования куратором задайте "
+                f"`{analytics.SHOW_RECENT_QUESTIONS_ENV}=true` в `.env` и перезапустите приложение."
             )
-        if "Тема" in recent_display.columns:
-            recent_display["Тема"] = recent_display["Тема"].map(
-                lambda x: TOPIC_RU.get(x, x)
+        else:
+            st.subheader("Последние 10 вопросов")
+            recent = analytics.recent_questions(df_log, n=10)
+            # Переименовываем колонки для русскоязычного отображения
+            COL_RU = {
+                "timestamp": "Дата/время",
+                "question": "Вопрос",
+                "learner_level": "Уровень",
+                "topic_guess": "Тема",
+            }
+            recent_display = recent.rename(columns=COL_RU)
+            if "Уровень" in recent_display.columns:
+                recent_display["Уровень"] = recent_display["Уровень"].map(
+                    lambda x: LEVEL_RU.get(x, x)
+                )
+            if "Тема" in recent_display.columns:
+                recent_display["Тема"] = recent_display["Тема"].map(
+                    lambda x: TOPIC_RU.get(x, x)
+                )
+            st.dataframe(
+                recent_display,
+                width="stretch",
+                hide_index=True,
             )
-        st.dataframe(
-            recent_display,
-            width="stretch",
-            hide_index=True,
-        )

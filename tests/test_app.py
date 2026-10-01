@@ -143,9 +143,65 @@ def test_opening_the_app_makes_no_api_calls(make_app, monkeypatch, api_key):
     assert {name: r.calls for name, r in recorders.items() if r.calls} == {}
 
 
-def test_app_uses_no_deprecated_streamlit_apis(make_app):
+def dataframe_text(at):
+    return "\n".join(df.value.to_string() for df in at.dataframe)
+
+
+SECRET_QUESTION = "Меня зовут Иван Петров, мой телефон 8-900-123-45-67"
+
+
+def test_analytics_hides_raw_questions_by_default_but_keeps_aggregates(make_app):
+    logger.log_query(SECRET_QUESTION, "beginner", [], "ответ")
+    logger.log_query("Что такое RAG?", "advanced", [], "ответ")
+
+    at = make_app().run()
+
+    assert not at.exception
+    # Aggregates still render ...
+    assert [m.value for m in at.metric] == ["2", "1", "1"]
+    subheaders = [s.value for s in at.subheader]
+    assert "По уровню студента" in subheaders
+    assert "По теме вопроса" in subheaders
+    assert len(at.get("vega_lite_chart")) == 2  # st.bar_chart: by level, by topic
+    # ... but no raw question text is rendered anywhere, and the table is absent.
+    assert "Последние 10 вопросов" not in subheaders
+    assert any("скрыты по умолчанию" in c.value for c in at.caption)
+    assert "Иван Петров" not in all_text(at)
+    assert "Иван Петров" not in dataframe_text(at)
+    assert "Что такое RAG?" not in dataframe_text(at)
+
+
+@pytest.mark.parametrize("value", ["false", "0", "off"])
+def test_analytics_stays_hidden_for_non_opt_in_values(make_app, monkeypatch, value):
+    monkeypatch.setenv("SHOW_RECENT_QUESTIONS", value)
+    logger.log_query(SECRET_QUESTION, "beginner", [], "ответ")
+
+    at = make_app().run()
+
+    assert not at.exception
+    assert "Иван Петров" not in dataframe_text(at)
+
+
+def test_analytics_shows_recent_questions_on_explicit_opt_in(make_app, monkeypatch):
+    monkeypatch.setenv("SHOW_RECENT_QUESTIONS", "true")
+    logger.log_query(SECRET_QUESTION, "beginner", [], "ответ")
+    logger.log_query("Что такое RAG?", "advanced", [], "ответ")
+
+    at = make_app().run()
+
+    assert not at.exception
+    assert [m.value for m in at.metric] == ["2", "1", "1"]  # aggregates unchanged
+    assert "Последние 10 вопросов" in [s.value for s in at.subheader]
+    table = dataframe_text(at)
+    assert "Иван Петров" in table
+    assert "Что такое RAG?" in table
+    assert not any("скрыты по умолчанию" in c.value for c in at.caption)
+
+
+def test_app_uses_no_deprecated_streamlit_apis(make_app, monkeypatch):
     # Streamlit reports deprecations (e.g. use_container_width) on a logger that
     # does not propagate, so attach a handler to it directly.
+    monkeypatch.setenv("SHOW_RECENT_QUESTIONS", "true")  # render the recent-questions table too
     messages = []
 
     class Collect(logging.Handler):
